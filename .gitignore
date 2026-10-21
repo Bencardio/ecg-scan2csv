@@ -1,0 +1,13 @@
+__pycache__/
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+# données patients : ne jamais versionner
+scans/
+csv/
+*.csv
+*.npy
+!tests/data/*.csv

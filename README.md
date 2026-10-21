@@ -14,6 +14,41 @@ La segmentation et l'extraction des tracés reposent sur
 [Open-ECG-Digitizer](https://github.com/Ahus-AIM/Open-ECG-Digitizer)
 (Stenhede, Bjørnstad, Ranjbar, *npj Digital Medicine* 2026, [doi:10.1038/s41746-025-02327-1](https://doi.org/10.1038/s41746-025-02327-1)).
 
+## Marche à suivre pour l'étude (PDF scannés, GE 3x4 + bande V1)
+
+1. **Une fois par poste** : installer Python 3.12 ou plus récent ([python.org](https://www.python.org/downloads/) ;
+   sous Windows, cocher « Add python.exe to PATH »), puis dans un terminal :
+
+   ```bash
+   python -m venv ecgscan-env
+   ecgscan-env\Scripts\activate          # Windows ; macOS / Linux : source ecgscan-env/bin/activate
+   pip install "ecgscan[digitizer] @ https://github.com/Bencardio/ecg-scan2csv/archive/main.zip"
+   ecgscan setup                          # ~115 Mo, une seule fois
+   ```
+
+2. **Ranger les PDF** dans un dossier, par exemple `scans/`, nommés comme l'identifiant à apparier
+   (`patient_012.pdf`). Un PDF de plusieurs pages donne `patient_012_p1.csv`, `patient_012_p2.csv`…
+   Ce dossier ne doit jamais être placé dans le dépôt git.
+
+3. **Convertir** (à chaque nouvelle session, réactiver l'environnement de l'étape 1) :
+
+   ```bash
+   ecgscan convert scans/ csv/ --layout 3x4 --rhythm V1 --speed 25
+   ```
+
+   L'écran affiche `OK` ou `!!` par ECG. Si une page est en portrait (ECG couché), le fichier est refusé avec un
+   message : relancer ces fichiers avec `--rotate 90` (ou `270` s'ils sont tournés dans l'autre sens).
+
+4. **Contrôler** dans `csv/ecgscan_summary.json` et dans le JSON de chaque ECG :
+   `gain_source` doit valoir `calibration_pulse` (sinon relancer avec `--gain 10` après lecture de l'en-tête),
+   `duration_s` ≈ 10, `qc.leads_over_threshold` vide, aucun avertissement sur `rhythm_V1` (corrélation avec
+   le segment V1 de la grille, écrêtage des S profondes).
+
+5. **Valider** une fois sur ~10 ECG disponibles aussi en PDF vectoriel (voir [Validation](#validation)),
+   avant de lancer toute la série.
+
+6. **Ouvrir les CSV** dans ecg-vcg (entrée « signal numérisé »), puis exporter vers BRAVEHEART.
+
 ## Installation (Windows, macOS, Linux)
 
 Prérequis : **Python 3.12 ou plus récent** ([python.org](https://www.python.org/downloads/)). Git n'est pas nécessaire.
@@ -42,7 +77,7 @@ ecgscan convert scans/ csv/ --layout 6x2 --rhythm ""            # Dräger 6x2 sa
 ecgscan convert scans/ csv/ --layout 12x1
 ```
 
-Options utiles : `--gain 10` (impose le gain si l'impulsion n'est pas lue), `--device cpu|cuda:0`,
+Options utiles : `--rotate 90|180|270` (pages scannées couchées), `--pdf-dpi 600`, `--gain 10` (impose le gain si l'impulsion n'est pas lue), `--device cpu|cuda:0`,
 `--resample-size 4500` (résolution vue par le modèle, 3000 par défaut), `--save-raw` (garde les lignes brutes),
 `--nan-threshold 20`.
 
@@ -50,8 +85,11 @@ Un résumé du lot est écrit dans `csv/ecgscan_summary.json` ; chaque avertisse
 
 ### Préparer les scans
 
-- Scanner à plat, **en couleur, 600 dpi**, une page par fichier, en PNG, JPG ou TIFF (pas de PDF).
-- Nommer chaque fichier comme l'ECG à apparier : le CSV et le JSON gardent ce nom.
+- Formats lus : **PDF de scanner** (une image par page, une page = un ECG), PNG, JPG, TIFF.
+  Les pages PDF sont rendues à la résolution du scan qu'elles contiennent (notée dans `scan_dpi`, plafonnée à
+  600 dpi ; `--pdf-dpi` pour l'imposer).
+- Scanner à plat, **en couleur, 300 à 600 dpi**, page en paysage (sinon `--rotate`).
+- Nommer chaque fichier comme l'ECG à apparier : le CSV et le JSON gardent ce nom (suffixe `_p2`… par page).
 - Les photos fonctionnent mais sont nettement moins précises (corrélation 0,935–0,947 contre 0,987 pour les scans
   dans l'article).
 

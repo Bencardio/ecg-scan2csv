@@ -30,6 +30,9 @@ WEIGHTS = {
 }
 DEFAULT_CONFIG = "inference_wrapper_ahus_testset.yml"
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
+INPUT_EXT = IMAGE_EXT + (".pdf",)
+PDF_FALLBACK_DPI = 300  # A4 à 300 dpi ≈ 3500 px, au-dessus des 3000 px vus par le modèle
+PDF_MAX_DPI = 600
 
 
 def home() -> Path:
@@ -112,6 +115,52 @@ def default_device() -> str:
     return "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
+def _pdf_scan_dpi(page) -> float | None:
+    """Résolution du scan inclus dans une page PDF : pixels de la plus grande image / largeur imprimée (pouces)."""
+    import pypdfium2.raw as pdfium_c
+
+    best = None
+    for obj in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE]):
+        left, _, right, _ = obj.get_bounds() if hasattr(obj, "get_bounds") else obj.get_pos()
+        width_px, _ = obj.get_px_size()
+        width_in = (right - left) / 72
+        if width_in > 0 and (best is None or width_in > best[0]):
+            best = (width_in, width_px / width_in)
+    return float(round(best[1])) if best else None
+
+
+def _rotate(image, degrees_cw: int):
+    return image.rotate(-degrees_cw, expand=True) if degrees_cw % 360 else image
+
+
+def iter_pages(path: str | Path, pdf_dpi: int | None = None, rotate: int = 0):
+    """Une image RGB par page, l'une après l'autre : (n° de page, nombre de pages, image PIL, dpi du scan ou None).
+
+    Les pages PDF sont rendues à la résolution du scan qu'elles contiennent (plafonnée à 600 dpi ; 300 dpi si
+    elle est inconnue), sauf si pdf_dpi est imposé. rotate : rotation horaire en degrés appliquée à chaque page.
+    """
+    from PIL import Image
+
+    path = Path(path)
+    if path.suffix.lower() != ".pdf":
+        with Image.open(path) as im:
+            dpi = im.info.get("dpi")
+            yield 1, 1, _rotate(im.convert("RGB"), rotate), (float(round(dpi[0])) if dpi else None)
+        return
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(str(path))
+    try:
+        for i, page in enumerate(pdf, 1):
+            dpi = _pdf_scan_dpi(page)
+            render_dpi = pdf_dpi or min(dpi or PDF_FALLBACK_DPI, PDF_MAX_DPI)
+            image = page.render(scale=render_dpi / 72).to_pil().convert("RGB")
+            page.close()
+            yield i, len(pdf), _rotate(image, rotate), dpi
+    finally:
+        pdf.close()
+
+
 class Digitizer:
     """Enveloppe l'InferenceWrapper du digitizer ; renvoie les lignes brutes (µV lus à 10 mm/mV) et la grille."""
 
@@ -144,23 +193,13 @@ class Digitizer:
         finally:
             os.chdir(cwd)
 
-    @staticmethod
-    def load_image(path: str | Path):
-        import torch
-        from PIL import Image
-
-        with Image.open(path) as im:
-            dpi = im.info.get("dpi")
-            rgb = np.array(im.convert("RGB"))
-        tensor = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0).contiguous()
-        return tensor, (float(round(dpi[0])) if dpi else None)
-
-    def __call__(self, path: str | Path) -> dict[str, Any]:
+    def __call__(self, image) -> dict[str, Any]:
+        """image : image PIL RGB d'une page (voir iter_pages)."""
         import torch
 
-        image, dpi = self.load_image(path)
+        tensor = torch.from_numpy(np.array(image)).permute(2, 0, 1).unsqueeze(0).contiguous()
         with torch.no_grad():
-            got = self.wrapper(image, layout_should_include_substring=None)
+            got = self.wrapper(tensor, layout_should_include_substring=None)
         lines = got["signal"]["lines"]
         if lines is None:
             raise RuntimeError("le digitizer n'a extrait aucun tracé")
@@ -170,7 +209,6 @@ class Digitizer:
         return {
             "lines_uV": lines,
             "px_per_mm_x": 1.0 / float(got["pixel_spacing_mm"]["x"]),
-            "dpi": dpi,
             "layout_guess": got.get("layout_name"),
         }
 

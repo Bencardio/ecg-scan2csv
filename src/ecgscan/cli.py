@@ -31,9 +31,9 @@ def cmd_convert(args: argparse.Namespace) -> int:
     from . import digitizer
 
     in_dir, out_dir = Path(args.input).resolve(), Path(args.output).resolve()
-    files = sorted(p for p in in_dir.rglob("*") if p.suffix.lower() in digitizer.IMAGE_EXT)
+    files = sorted(p for p in in_dir.rglob("*") if p.suffix.lower() in digitizer.INPUT_EXT)
     if not files:
-        print(f"Aucune image (PNG, JPG, TIFF) dans {in_dir}")
+        print(f"Aucun scan (PDF, PNG, JPG, TIFF) dans {in_dir}")
         return 1
     if not digitizer.is_installed():
         digitizer.install()
@@ -45,35 +45,53 @@ def cmd_convert(args: argparse.Namespace) -> int:
         nan_threshold_pct=args.nan_threshold,
     )
     model = digitizer.Digitizer(device=args.device, resample_size=args.resample_size)
-    print(f"{len(files)} scans, appareil de calcul : {model.device}")
+    print(f"{len(files)} fichiers, appareil de calcul : {model.device}")
 
+    out_dir.mkdir(parents=True, exist_ok=True)
     summary = []
     for path in files:
         rel = path.relative_to(in_dir)
-        base = out_dir / rel.with_suffix("")
-        base.parent.mkdir(parents=True, exist_ok=True)
-        entry: dict = {"file": str(rel)}
-        try:
-            got = model(path)
-            data, header, meta = post.process(got["lines_uV"], got["px_per_mm_x"], settings)
-            meta = {"file": path.name, **meta, "scan_dpi": got["dpi"] or args.dpi}
-            meta["pipeline"].update(
-                ecgscan=__version__,
-                digitizer_commit=digitizer.COMMIT,
-                digitizer_layout_guess=got["layout_guess"],
-                resample_size=int(model.config.MODEL.KWARGS.resample_size),
-            )
-            post.write_outputs(data, header, meta, str(base) + ".csv", str(base) + ".json")
-            if args.save_raw:
-                np.save(str(base) + "_raw_lines_uV.npy", got["lines_uV"])
-            entry.update(status="ok", warnings=meta["qc"]["warnings"], over=meta["qc"]["leads_over_threshold"])
-        except Exception as e:  # le lot continue ; l'échec est tracé dans le résumé
-            entry.update(status="error", error=str(e), trace=traceback.format_exc(limit=3))
-        summary.append(entry)
-        ok = entry["status"] == "ok" and not entry.get("warnings")
-        print(("OK  " if ok else "!!  ") + str(rel) + ("" if entry["status"] == "ok" else f" : {entry['error']}"))
-        for w in entry.get("warnings", []):
-            print(f"      - {w}")
+        pages = digitizer.iter_pages(path, args.pdf_dpi, args.rotate)
+        while True:
+            try:
+                i, n, image, dpi = next(pages)
+            except StopIteration:
+                break
+            except Exception as e:
+                summary.append({"file": str(rel), "status": "error", "error": f"lecture impossible : {e}"})
+                print(f"!!  {rel} : lecture impossible : {e}")
+                break
+            # Un PDF de plusieurs pages donne <nom>_p1, <nom>_p2… ; une page seule garde le nom du scan.
+            name = rel.with_suffix("").name + (f"_p{i}" if n > 1 else "")
+            base = out_dir / rel.parent / name
+            base.parent.mkdir(parents=True, exist_ok=True)
+            label = str(rel) + (f" (page {i})" if n > 1 else "")
+            entry: dict = {"file": str(rel), "page": i, "output": name + ".csv"}
+            try:
+                if image.height > image.width:
+                    raise ValueError(
+                        "page en portrait : l'ECG est probablement tourné, relancer avec --rotate 90 (ou 270)"
+                    )
+                got = model(image)
+                data, header, meta = post.process(got["lines_uV"], got["px_per_mm_x"], settings)
+                meta = {"file": path.name, "page": i, **meta, "scan_dpi": dpi or args.dpi}
+                meta["pipeline"].update(
+                    ecgscan=__version__,
+                    digitizer_commit=digitizer.COMMIT,
+                    digitizer_layout_guess=got["layout_guess"],
+                    resample_size=int(model.config.MODEL.KWARGS.resample_size),
+                )
+                post.write_outputs(data, header, meta, str(base) + ".csv", str(base) + ".json")
+                if args.save_raw:
+                    np.save(str(base) + "_raw_lines_uV.npy", got["lines_uV"])
+                entry.update(status="ok", warnings=meta["qc"]["warnings"], over=meta["qc"]["leads_over_threshold"])
+            except Exception as e:  # le lot continue ; l'échec est tracé dans le résumé
+                entry.update(status="error", error=str(e), trace=traceback.format_exc(limit=3))
+            summary.append(entry)
+            ok = entry["status"] == "ok" and not entry.get("warnings")
+            print(("OK  " if ok else "!!  ") + label + ("" if entry["status"] == "ok" else f" : {entry['error']}"))
+            for w in entry.get("warnings", []):
+                print(f"      - {w}")
 
     with open(out_dir / "ecgscan_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
@@ -108,13 +126,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_info)
 
     s = sub.add_parser("convert", help="convertit un dossier de scans")
-    s.add_argument("input", help="dossier des scans (PNG, JPG, TIFF ; sous-dossiers inclus)")
+    s.add_argument("input", help="dossier des scans (PDF, PNG, JPG, TIFF ; sous-dossiers inclus)")
     s.add_argument("output", help="dossier de sortie")
     s.add_argument("--layout", default="3x4", choices=sorted(post.GRIDS), help="grille imprimée (défaut 3x4)")
     s.add_argument("--rhythm", default="V1", help="bandes rythme de haut en bas, ex. V1 ou V1,II,V5 ; '' si aucune")
     s.add_argument("--speed", type=float, default=25.0, help="vitesse en mm/s (défaut 25)")
     s.add_argument("--gain", default="auto", help="mm/mV, ou 'auto' : lu sur l'impulsion d'étalonnage (défaut)")
-    s.add_argument("--dpi", type=float, default=None, help="résolution du scan si absente du fichier image")
+    s.add_argument("--dpi", type=float, default=None, help="résolution du scan si absente du fichier")
+    s.add_argument("--pdf-dpi", type=int, default=None, help="résolution de rendu des PDF (défaut : celle du scan, max 600)")
+    s.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270], help="rotation horaire des pages, en degrés")
     s.add_argument("--nan-threshold", type=float, default=20.0, help="%% de NaN au-delà duquel une dérivation est signalée")
     s.add_argument("--device", default=None, help="cpu, cuda:0… (défaut : GPU si disponible)")
     s.add_argument("--resample-size", type=int, default=None, help="côté de l'image pour le modèle (défaut du digitizer : 3000)")

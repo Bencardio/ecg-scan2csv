@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecgscan"
+dynamic = ["version"]
+description = "ECG papier scannés -> CSV 500 Hz + JSON (format d'échange ecg-vcg), via Open-ECG-Digitizer"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Benjamin" }]
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+# Dépendances d'inférence d'Open-ECG-Digitizer (sans ray, tensorboard ni transformers, inutiles ici)
+digitizer = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "scipy>=1.11",
+    "scikit-image>=0.22",
+    "scikit-learn>=1.4",
+    "matplotlib>=3.8",
+    "networkx>=3.2",
+    "torch-tps>=1.0",
+    "yacs>=0.1.8",
+    "pyyaml>=6.0",
+    "pillow>=10.0",
+    "tqdm>=4.66",
+]
+test = ["pytest>=8", "matplotlib>=3.8", "pillow>=10.0"]
+
+[project.scripts]
+ecgscan = "ecgscan.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "ecgscan.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

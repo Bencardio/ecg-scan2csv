@@ -14,40 +14,44 @@ La segmentation et l'extraction des tracés reposent sur
 [Open-ECG-Digitizer](https://github.com/Ahus-AIM/Open-ECG-Digitizer)
 (Stenhede, Bjørnstad, Ranjbar, *npj Digital Medicine* 2026, [doi:10.1038/s41746-025-02327-1](https://doi.org/10.1038/s41746-025-02327-1)).
 
+## Application (le plus simple)
+
+Comme Analyse ECG-VCG, l'outil s'utilise depuis le navigateur : on dépose les scans, on vérifie chaque tracé
+reconstruit à côté du scan d'origine, on télécharge les CSV + JSON. Différence : le modèle de numérisation
+(PyTorch, ~115 Mo) ne peut pas tourner dans une page web ; l'application s'exécute donc **sur le poste**, et
+s'ouvre dans le navigateur à l'adresse `http://localhost:…`. Les scans ne quittent pas l'ordinateur.
+
+**Une fois par poste** : installer Python 3.12 ou plus récent depuis [python.org](https://www.python.org/downloads/)
+(sous Windows, cocher « Add python.exe to PATH »).
+
+**Ensuite, double-cliquer sur le lanceur** :
+
+- Windows : [`ECG-numerisation-Windows.bat`](https://github.com/Bencardio/ecg-scan2csv/raw/main/lanceurs/ECG-numerisation-Windows.bat)
+  (clic droit > Enregistrer le lien sous ; si Windows SmartScreen bloque, « Informations complémentaires » > « Exécuter quand même ») ;
+- Mac : [`ECG-numerisation-Mac.command`](https://github.com/Bencardio/ecg-scan2csv/raw/main/lanceurs/ECG-numerisation-Mac.command)
+  (après téléchargement, une fois dans le Terminal : `chmod +x ~/Downloads/ECG-numerisation-Mac.command`, puis
+  clic droit > Ouvrir).
+
+Le premier lancement installe tout dans `ecgscan-env` du dossier personnel (quelques minutes, ~1 Go), puis
+l'application propose de télécharger le modèle. Les lancements suivants vérifient s'il existe une mise à jour et
+ouvrent directement l'application. Sans lanceur : `ecgscan app` dans l'environnement installé (voir plus bas).
+
 ## Marche à suivre pour l'étude (PDF scannés, GE 3x4 + bande V1)
 
-1. **Une fois par poste** : installer Python 3.12 ou plus récent ([python.org](https://www.python.org/downloads/) ;
-   sous Windows, cocher « Add python.exe to PATH »), puis dans un terminal :
+1. **Ouvrir l'application** (lanceur ci-dessus).
+2. **Déposer les PDF** (ou choisir le dossier), nommés comme l'identifiant à apparier (`patient_012.pdf`).
+   Un PDF de plusieurs pages donne `patient_012_p1`, `patient_012_p2`…
+3. **Format du tracé** : grille `3x4`, bande rythme `V1`, 25 mm/s, gain `auto` (valeurs par défaut).
+   Si les pages ont été scannées couchées, l'ECG est refusé avec un message : choisir une rotation de 90° (ou 270°).
+4. **Numériser**, puis contrôler chaque ECG (Précédent / Suivant) : tracé reconstruit à comparer au scan,
+   gain lu sur l'impulsion, durée ≈ 10 s, aucune dérivation exclue (> 20 % de NaN), pas d'alerte sur `rhythm_V1`
+   (ordre des rangées, écrêtage des S profondes). Si le gain est « supposé », imposer 10 mm/mV après lecture de l'en-tête.
+5. **Télécharger le .zip** (un CSV + un JSON par ECG, plus le tableau du lot) et l'ouvrir dans Analyse ECG-VCG
+   (entrée « signal numérisé »), puis exporter vers BRAVEHEART.
+6. **Avant toute la série**, valider sur ~10 ECG disponibles aussi en PDF vectoriel (voir [Validation](#validation)).
 
-   ```bash
-   python -m venv ecgscan-env
-   ecgscan-env\Scripts\activate          # Windows ; macOS / Linux : source ecgscan-env/bin/activate
-   pip install "ecgscan[digitizer] @ https://github.com/Bencardio/ecg-scan2csv/archive/main.zip"
-   ecgscan setup                          # ~115 Mo, une seule fois
-   ```
-
-2. **Ranger les PDF** dans un dossier, par exemple `scans/`, nommés comme l'identifiant à apparier
-   (`patient_012.pdf`). Un PDF de plusieurs pages donne `patient_012_p1.csv`, `patient_012_p2.csv`…
-   Ce dossier ne doit jamais être placé dans le dépôt git.
-
-3. **Convertir** (à chaque nouvelle session, réactiver l'environnement de l'étape 1) :
-
-   ```bash
-   ecgscan convert scans/ csv/ --layout 3x4 --rhythm V1 --speed 25
-   ```
-
-   L'écran affiche `OK` ou `!!` par ECG. Si une page est en portrait (ECG couché), le fichier est refusé avec un
-   message : relancer ces fichiers avec `--rotate 90` (ou `270` s'ils sont tournés dans l'autre sens).
-
-4. **Contrôler** dans `csv/ecgscan_summary.json` et dans le JSON de chaque ECG :
-   `gain_source` doit valoir `calibration_pulse` (sinon relancer avec `--gain 10` après lecture de l'en-tête),
-   `duration_s` ≈ 10, `qc.leads_over_threshold` vide, aucun avertissement sur `rhythm_V1` (corrélation avec
-   le segment V1 de la grille, écrêtage des S profondes).
-
-5. **Valider** une fois sur ~10 ECG disponibles aussi en PDF vectoriel (voir [Validation](#validation)),
-   avant de lancer toute la série.
-
-6. **Ouvrir les CSV** dans ecg-vcg (entrée « signal numérisé »), puis exporter vers BRAVEHEART.
+La même chose en ligne de commande, pour de gros lots :
+`ecgscan convert scans/ csv/ --layout 3x4 --rhythm V1 --speed 25` (ajouter `--rotate 90` si besoin).
 
 ## Installation (Windows, macOS, Linux)
 
@@ -59,6 +63,7 @@ python -m venv ecgscan-env
 pip install "ecgscan[digitizer] @ https://github.com/Bencardio/ecg-scan2csv/archive/main.zip"
 ecgscan setup        # télécharge une seule fois le digitizer figé et ses poids (~115 Mo) dans ~/.ecgscan
 ecgscan info         # vérifie l'installation et la présence d'un GPU
+ecgscan app          # ouvre l'application dans le navigateur
 ```
 
 Avec une carte NVIDIA, installer d'abord PyTorch avec CUDA depuis [pytorch.org](https://pytorch.org/get-started/locally/)

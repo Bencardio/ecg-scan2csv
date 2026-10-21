@@ -11,6 +11,7 @@ Ce module ne dépend que de numpy, pour pouvoir être testé sans le modèle.
 from __future__ import annotations
 
 import csv
+import io
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -279,11 +280,21 @@ def process(lines_uV: np.ndarray, px_per_mm_x: float, settings: Settings) -> tup
     return data, header, meta
 
 
+def csv_text(data: np.ndarray, header: list[str]) -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(header)
+    for row in data:
+        w.writerow(["NaN" if np.isnan(v) else f"{v:.6g}" for v in row])
+    return buf.getvalue()
+
+
+def json_text(meta: dict[str, Any]) -> str:
+    return json.dumps(meta, ensure_ascii=False, indent=2)
+
+
 def write_outputs(data: np.ndarray, header: list[str], meta: dict[str, Any], csv_path: str, json_path: str) -> None:
     with open(csv_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(header)
-        for row in data:
-            w.writerow(["NaN" if np.isnan(v) else f"{v:.6g}" for v in row])
+        f.write(csv_text(data, header))
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+        f.write(json_text(meta))

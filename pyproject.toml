@@ -28,8 +28,9 @@ digitizer = [
     "pillow>=10.0",
     "pypdfium2>=4.30",
     "tqdm>=4.66",
+    "streamlit>=1.50",
 ]
-test = ["pytest>=8", "matplotlib>=3.8", "pillow>=10.0", "pypdfium2>=4.30"]
+test = ["pytest>=8", "matplotlib>=3.8", "pillow>=10.0", "pypdfium2>=4.30", "streamlit>=1.50"]
 
 [project.scripts]
 ecgscan = "ecgscan.cli:main"

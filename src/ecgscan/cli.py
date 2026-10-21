@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import traceback
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +27,7 @@ def cmd_info(args: argparse.Namespace) -> int:
 
 
 def cmd_convert(args: argparse.Namespace) -> int:
-    from . import digitizer
+    from . import convert, digitizer
 
     in_dir, out_dir = Path(args.input).resolve(), Path(args.output).resolve()
     files = sorted(p for p in in_dir.rglob("*") if p.suffix.lower() in digitizer.INPUT_EXT)
@@ -51,42 +50,22 @@ def cmd_convert(args: argparse.Namespace) -> int:
     summary = []
     for path in files:
         rel = path.relative_to(in_dir)
-        pages = digitizer.iter_pages(path, args.pdf_dpi, args.rotate)
-        while True:
-            try:
-                i, n, image, dpi = next(pages)
-            except StopIteration:
-                break
-            except Exception as e:
-                summary.append({"file": str(rel), "status": "error", "error": f"lecture impossible : {e}"})
-                print(f"!!  {rel} : lecture impossible : {e}")
-                break
-            # Un PDF de plusieurs pages donne <nom>_p1, <nom>_p2… ; une page seule garde le nom du scan.
-            name = rel.with_suffix("").name + (f"_p{i}" if n > 1 else "")
-            base = out_dir / rel.parent / name
-            base.parent.mkdir(parents=True, exist_ok=True)
-            label = str(rel) + (f" (page {i})" if n > 1 else "")
-            entry: dict = {"file": str(rel), "page": i, "output": name + ".csv"}
-            try:
-                if image.height > image.width:
-                    raise ValueError(
-                        "page en portrait : l'ECG est probablement tourné, relancer avec --rotate 90 (ou 270)"
-                    )
-                got = model(image)
-                data, header, meta = post.process(got["lines_uV"], got["px_per_mm_x"], settings)
-                meta = {"file": path.name, "page": i, **meta, "scan_dpi": dpi or args.dpi}
-                meta["pipeline"].update(
-                    ecgscan=__version__,
-                    digitizer_commit=digitizer.COMMIT,
-                    digitizer_layout_guess=got["layout_guess"],
-                    resample_size=int(model.config.MODEL.KWARGS.resample_size),
-                )
-                post.write_outputs(data, header, meta, str(base) + ".csv", str(base) + ".json")
+        records = convert.convert_scan(
+            model, path, settings, rotate=args.rotate, pdf_dpi=args.pdf_dpi, default_dpi=args.dpi
+        )
+        for rec in records:
+            label = str(rel) + (f" (page {rec['page']})" if rec.get("n_pages", 1) > 1 else "")
+            entry: dict = {"file": str(rel), "page": rec["page"], "output": rec["name"] + ".csv", "status": rec["status"]}
+            if rec["status"] == "ok":
+                base = out_dir / rel.parent / rec["name"]
+                base.parent.mkdir(parents=True, exist_ok=True)
+                post.write_outputs(rec["data"], rec["header"], rec["meta"], str(base) + ".csv", str(base) + ".json")
                 if args.save_raw:
-                    np.save(str(base) + "_raw_lines_uV.npy", got["lines_uV"])
-                entry.update(status="ok", warnings=meta["qc"]["warnings"], over=meta["qc"]["leads_over_threshold"])
-            except Exception as e:  # le lot continue ; l'échec est tracé dans le résumé
-                entry.update(status="error", error=str(e), trace=traceback.format_exc(limit=3))
+                    np.save(str(base) + "_raw_lines_uV.npy", rec["raw"])
+                qc = rec["meta"]["qc"]
+                entry.update(warnings=qc["warnings"], over=qc["leads_over_threshold"])
+            else:
+                entry.update(error=rec["error"], trace=rec.get("trace"))
             summary.append(entry)
             ok = entry["status"] == "ok" and not entry.get("warnings")
             print(("OK  " if ok else "!!  ") + label + ("" if entry["status"] == "ok" else f" : {entry['error']}"))
@@ -98,6 +77,33 @@ def cmd_convert(args: argparse.Namespace) -> int:
     n_ok = sum(e["status"] == "ok" for e in summary)
     print(f"{n_ok}/{len(summary)} ECG convertis ; détail dans {out_dir / 'ecgscan_summary.json'}")
     return 0 if n_ok == len(summary) else 2
+
+
+def cmd_app(args: argparse.Namespace) -> int:
+    import socket
+    import subprocess
+    import threading
+    import webbrowser
+
+    port = args.port
+    if not port:
+        with socket.socket() as sock:  # premier port libre
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+    url = f"http://localhost:{port}"
+    # headless : pas de question « Email » de Streamlit au premier lancement ; on ouvre le navigateur nous-mêmes.
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", str(Path(__file__).with_name("app.py")),
+        "--server.headless", "true", "--server.address", "localhost", "--server.port", str(port),
+        "--browser.gatherUsageStats", "false", "--client.toolbarMode", "minimal",
+    ]
+    print(f"Application : {url} (Ctrl+C pour arrêter)")
+    if not args.no_browser:
+        threading.Timer(3.0, webbrowser.open, args=(url,)).start()
+    try:
+        return subprocess.call(cmd)
+    except KeyboardInterrupt:
+        return 0
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
@@ -121,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("setup", help="télécharge Open-ECG-Digitizer et ses poids (une seule fois)")
     s.add_argument("--force", action="store_true", help="retélécharger")
     s.set_defaults(func=cmd_setup)
+
+    s = sub.add_parser("app", help="ouvre l'application dans le navigateur (tout reste sur ce poste)")
+    s.add_argument("--port", type=int, default=None, help="port local (défaut : un port libre)")
+    s.add_argument("--no-browser", action="store_true", help="ne pas ouvrir le navigateur")
+    s.set_defaults(func=cmd_app)
 
     s = sub.add_parser("info", help="versions, dossier du digitizer, GPU")
     s.set_defaults(func=cmd_info)

@@ -139,3 +139,34 @@ def test_ecgscan_app_serves_page():
     finally:
         proc.terminate()
         proc.wait(timeout=20)
+
+
+def test_convert_resumes_after_interruption(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(digitizer, "is_installed", lambda: True)
+    monkeypatch.setattr(digitizer, "Digitizer", FakeModel)
+    (tmp_path / "scans").mkdir()
+    for name in ("a", "b", "c"):
+        landscape(tmp_path / "scans" / f"{name}.pdf")
+    out = tmp_path / "out"
+    assert cli.main(["convert", str(tmp_path / "scans"), str(out)]) == 0
+    (out / "c.json").unlink()  # comme si le lot s'était arrêté avant c
+    calls = []
+    monkeypatch.setattr(convert, "convert_scan", lambda m, path, *a, **k: calls.append(path.name) or [])
+    assert cli.main(["convert", str(tmp_path / "scans"), str(out)]) == 0
+    assert calls == ["c.pdf"]
+    assert "déjà converti" in capsys.readouterr().out
+
+
+def test_digitizer_downscales_before_model():
+    seen = {}
+
+    def wrapper(tensor, **kwargs):
+        seen["shape"] = tuple(tensor.shape)
+        return {"signal": {"lines": np.zeros((4, 10))}, "pixel_spacing_mm": {"x": 0.1}, "layout_name": "x"}
+
+    pytest.importorskip("torch")
+    model = digitizer.Digitizer.__new__(digitizer.Digitizer)
+    model.config = FakeModel.config
+    model.wrapper = wrapper
+    model(Image.new("RGB", (7000, 4950), "white"))
+    assert seen["shape"] == (1, 3, 2121, 3000)

@@ -52,6 +52,8 @@ ouvrent directement l'application. Sans lanceur : `ecgscan app` dans l'environne
 
 La même chose en ligne de commande, pour de gros lots :
 `ecgscan convert scans/ csv/ --layout 3x4 --rhythm V1 --speed 25` (ajouter `--rotate 90` si besoin).
+Sur un portable sans carte graphique, compter 1 à 3 minutes par ECG. Un lot interrompu reprend où il s'était
+arrêté si on relance la même commande (les ECG déjà convertis sont ignorés, `--force` pour tout refaire).
 
 ## Installation (Windows, macOS, Linux)
 
@@ -82,7 +84,7 @@ ecgscan convert scans/ csv/ --layout 6x2 --rhythm ""            # Dräger 6x2 sa
 ecgscan convert scans/ csv/ --layout 12x1
 ```
 
-Options utiles : `--rotate 90|180|270` (pages scannées couchées), `--pdf-dpi 600`, `--gain 10` (impose le gain si l'impulsion n'est pas lue), `--device cpu|cuda:0`,
+Options utiles : `--rotate 90|180|270` (pages scannées couchées), `--gain 10` (impose le gain si l'impulsion n'est pas lue), `--device cpu|cuda:0`,
 `--resample-size 4500` (résolution vue par le modèle, 3000 par défaut), `--save-raw` (garde les lignes brutes),
 `--nan-threshold 20`.
 
@@ -91,8 +93,8 @@ Un résumé du lot est écrit dans `csv/ecgscan_summary.json` ; chaque avertisse
 ### Préparer les scans
 
 - Formats lus : **PDF de scanner** (une image par page, une page = un ECG), PNG, JPG, TIFF.
-  Les pages PDF sont rendues à la résolution du scan qu'elles contiennent (notée dans `scan_dpi`, plafonnée à
-  600 dpi ; `--pdf-dpi` pour l'imposer).
+  Les pages PDF sont rendues à la résolution du scan qu'elles contiennent (notée dans `scan_dpi`), plafonnée à
+  300 dpi : le modèle travaille de toute façon à 3000 px de grand côté (`--pdf-dpi` pour changer).
 - Scanner à plat, **en couleur, 300 à 600 dpi**, page en paysage (sinon `--rotate`).
 - Nommer chaque fichier comme l'ECG à apparier : le CSV et le JSON gardent ce nom (suffixe `_p2`… par page).
 - Les photos fonctionnent mais sont nettement moins précises (corrélation 0,935–0,947 contre 0,987 pour les scans

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -47,14 +49,37 @@ def cmd_convert(args: argparse.Namespace) -> int:
     print(f"{len(files)} fichiers, appareil de calcul : {model.device}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    summary = []
-    for path in files:
+    summary_path = out_dir / "ecgscan_summary.json"
+    previous = {}
+    if summary_path.exists() and not args.force:
+        try:
+            for e in json.loads(summary_path.read_text(encoding="utf-8")):
+                previous.setdefault(e["file"], []).append(e)
+        except (ValueError, KeyError, TypeError):
+            previous = {}
+
+    def save(entries: list[dict]) -> None:
+        # Écrit après chaque fichier : un lot interrompu garde son résumé et reprend là où il s'est arrêté.
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+
+    summary: list[dict] = []
+    for k, path in enumerate(files, 1):
         rel = path.relative_to(in_dir)
+        stem = out_dir / rel.parent / rel.with_suffix("").name
+        done = [Path(str(stem) + ".json"), Path(str(stem) + "_p1.json")]
+        if not args.force and any(d.exists() for d in done):
+            summary.extend(previous.get(str(rel)) or [{"file": str(rel), "status": "ok", "skipped": True}])
+            print(f"[{k}/{len(files)}] {rel} : déjà converti, ignoré (--force pour refaire)")
+            continue
+        print(f"[{k}/{len(files)}] {rel}…", flush=True)
+        start = time.perf_counter()
         records = convert.convert_scan(
             model, path, settings, rotate=args.rotate, pdf_dpi=args.pdf_dpi, default_dpi=args.dpi
         )
+        seconds = time.perf_counter() - start
         for rec in records:
-            label = str(rel) + (f" (page {rec['page']})" if rec.get("n_pages", 1) > 1 else "")
+            label = "    " + (f"page {rec['page']} : " if rec.get("n_pages", 1) > 1 else "")
             entry: dict = {"file": str(rel), "page": rec["page"], "output": rec["name"] + ".csv", "status": rec["status"]}
             if rec["status"] == "ok":
                 base = out_dir / rel.parent / rec["name"]
@@ -67,15 +92,19 @@ def cmd_convert(args: argparse.Namespace) -> int:
             else:
                 entry.update(error=rec["error"], trace=rec.get("trace"))
             summary.append(entry)
-            ok = entry["status"] == "ok" and not entry.get("warnings")
-            print(("OK  " if ok else "!!  ") + label + ("" if entry["status"] == "ok" else f" : {entry['error']}"))
+            if entry["status"] == "ok":
+                print(label + ("OK" if not entry["warnings"] else "à vérifier") + f" (calcul {seconds:.0f} s)")
+            else:
+                print(label + f"ÉCHEC : {entry['error']}")
             for w in entry.get("warnings", []):
                 print(f"      - {w}")
+        save(summary)
+        del records
+        gc.collect()
 
-    with open(out_dir / "ecgscan_summary.json", "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+    save(summary)
     n_ok = sum(e["status"] == "ok" for e in summary)
-    print(f"{n_ok}/{len(summary)} ECG convertis ; détail dans {out_dir / 'ecgscan_summary.json'}")
+    print(f"{n_ok}/{len(summary)} ECG convertis ; détail dans {summary_path}")
     return 0 if n_ok == len(summary) else 2
 
 
@@ -144,11 +173,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--speed", type=float, default=25.0, help="vitesse en mm/s (défaut 25)")
     s.add_argument("--gain", default="auto", help="mm/mV, ou 'auto' : lu sur l'impulsion d'étalonnage (défaut)")
     s.add_argument("--dpi", type=float, default=None, help="résolution du scan si absente du fichier")
-    s.add_argument("--pdf-dpi", type=int, default=None, help="résolution de rendu des PDF (défaut : celle du scan, max 600)")
+    s.add_argument("--pdf-dpi", type=int, default=None, help="résolution de rendu des PDF (défaut : celle du scan, max 300)")
     s.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270], help="rotation horaire des pages, en degrés")
     s.add_argument("--nan-threshold", type=float, default=20.0, help="%% de NaN au-delà duquel une dérivation est signalée")
     s.add_argument("--device", default=None, help="cpu, cuda:0… (défaut : GPU si disponible)")
     s.add_argument("--resample-size", type=int, default=None, help="côté de l'image pour le modèle (défaut du digitizer : 3000)")
+    s.add_argument("--force", action="store_true", help="refaire aussi les scans déjà convertis")
     s.add_argument("--save-raw", action="store_true", help="garde aussi les lignes brutes du digitizer (.npy)")
     s.set_defaults(func=cmd_convert)
 

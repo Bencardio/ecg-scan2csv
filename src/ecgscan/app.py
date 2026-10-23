@@ -8,6 +8,7 @@ Tout s'exécute sur ce poste : les scans ne sont envoyés à aucun serveur. Outi
 médical certifié : chaque tracé reconstruit doit être relu.
 """
 
+import gc
 import io
 import json
 import os
@@ -146,6 +147,7 @@ if run and uploaded:
                 while any(r["name"] == rec["name"] for r in results):  # même nom dans deux sous-dossiers
                     rec["name"], n = "%s (%d)" % (base, n), n + 1
                 results.append(rec)
+            gc.collect()
     progress.progress(1.0, text="Numérisation terminée : %d ECG." % len(results))
     st.session_state["results"] = results
     st.session_state["ecg_idx"] = 0

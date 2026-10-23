@@ -32,7 +32,7 @@ DEFAULT_CONFIG = "inference_wrapper_ahus_testset.yml"
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
 INPUT_EXT = IMAGE_EXT + (".pdf",)
 PDF_FALLBACK_DPI = 300  # A4 à 300 dpi ≈ 3500 px, au-dessus des 3000 px vus par le modèle
-PDF_MAX_DPI = 600
+PDF_MAX_DPI = 300  # au-delà, le modèle réduit de toute façon l'image : rendre plus fin ne coûte que temps et mémoire
 
 
 def home() -> Path:
@@ -136,7 +136,7 @@ def _rotate(image, degrees_cw: int):
 def iter_pages(path: str | Path, pdf_dpi: int | None = None, rotate: int = 0):
     """Une image RGB par page, l'une après l'autre : (n° de page, nombre de pages, image PIL, dpi du scan ou None).
 
-    Les pages PDF sont rendues à la résolution du scan qu'elles contiennent (plafonnée à 600 dpi ; 300 dpi si
+    Les pages PDF sont rendues à la résolution du scan qu'elles contiennent (plafonnée à 300 dpi ; 300 dpi si
     elle est inconnue), sauf si pdf_dpi est imposé. rotate : rotation horaire en degrés appliquée à chaque page.
     """
     from PIL import Image
@@ -196,7 +196,15 @@ class Digitizer:
     def __call__(self, image) -> dict[str, Any]:
         """image : image PIL RGB d'une page (voir iter_pages)."""
         import torch
+        from PIL import Image
 
+        # Le modèle ramène l'image à resample_size px de grand côté, mais après l'avoir normalisée en flottants à
+        # pleine résolution (plus de 1 Go pour une page à 600 dpi). La réduire ici donne le même résultat, plus vite
+        # et sans saturer la mémoire d'un portable.
+        size = self.config.MODEL.KWARGS.resample_size
+        if isinstance(size, int) and max(image.size) > size:
+            scale = size / max(image.size)
+            image = image.resize((round(image.width * scale), round(image.height * scale)), Image.LANCZOS)
         tensor = torch.from_numpy(np.array(image)).permute(2, 0, 1).unsqueeze(0).contiguous()
         with torch.no_grad():
             got = self.wrapper(tensor, layout_should_include_substring=None)
